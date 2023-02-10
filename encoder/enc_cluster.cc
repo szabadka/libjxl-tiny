@@ -175,7 +175,7 @@ void HistogramReindex(const std::vector<uint32_t>& symbols,
 void ClusterHistograms(std::vector<Histogram>* histograms,
                        std::vector<uint8_t>* context_map) {
   if (histograms->size() <= 1) return;
-  static const size_t kClustersLimit = 128;
+  static const size_t kClustersLimit = 8;
   size_t max_histograms = std::min(kClustersLimit, histograms->size());
 
   std::vector<Histogram> in(*histograms);

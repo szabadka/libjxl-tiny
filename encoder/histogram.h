@@ -38,6 +38,14 @@ struct Histogram {
     }
     total_count_ += other.total_count_;
   }
+  void InitStatic(const int32_t* data, size_t len) {
+    data_.resize(len);
+    total_count_ = 0;
+    for (size_t i = 0; i < len; ++i) {
+      data_[i] = data[i];
+      total_count_ += data_[i];
+    }
+  }
 
   std::vector<int32_t> data_;
   size_t total_count_;
@@ -46,26 +54,36 @@ struct Histogram {
 };
 
 struct HistogramBuilder {
-  explicit HistogramBuilder(const size_t num_contexts)
-      : histograms(num_contexts) {}
+  explicit HistogramBuilder(const uint8_t* context_map,
+                            const size_t num_contexts)
+      : static_context_map(context_map), histograms(num_contexts) {}
 
-  void Add(int symbol, size_t context) { histograms[context].Add(symbol); }
+  void Add(int symbol, size_t context) {
+    JXL_CHECK(context < histograms.size());
+    histograms[context].Add(symbol);
+  }
   void Add(const Token& token) {
     uint32_t tok, nbits, bits;
     UintCoder().Encode(token.value, &tok, &nbits, &bits);
-    Add(tok, token.context);
+    if (static_context_map != nullptr) {
+      Add(tok, static_cast<size_t>(static_context_map[token.context]));
+    } else {
+      Add(tok, token.context);
+    }
   }
   template <typename T>
   void Add(const std::vector<T>& v) {
     for (const auto& i : v) Add(i);
   }
 
+  const uint8_t* static_context_map = nullptr;
   std::vector<Histogram> histograms;
 };
 
 template <typename T>
-std::vector<Histogram> BuildHistograms(size_t num_contexts, std::vector<T>& v) {
-  HistogramBuilder builder(num_contexts);
+std::vector<Histogram> BuildHistograms(const uint8_t* context_map,
+                                       size_t num_contexts, std::vector<T>& v) {
+  HistogramBuilder builder(context_map, num_contexts);
   builder.Add(v);
   return builder.histograms;
 }

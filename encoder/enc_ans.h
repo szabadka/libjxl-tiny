@@ -37,8 +37,8 @@ void WriteHistograms(const std::vector<Histogram>& histograms,
                      EntropyEncodingData* codes, BitWriter* writer);
 
 void WriteTokens(const std::vector<Token>& tokens,
-                 const EntropyEncodingData& codes,
-                 const std::vector<uint8_t>& context_map, BitWriter* writer);
+                 const EntropyEncodingData& codes, const uint8_t* context_map,
+                 size_t num_contexts, BitWriter* writer);
 
 }  // namespace jxl
 #endif  // ENCODER_ENC_ANS_H_

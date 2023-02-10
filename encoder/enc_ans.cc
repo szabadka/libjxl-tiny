@@ -623,8 +623,8 @@ void WriteHistograms(const std::vector<Histogram>& histograms,
 }
 
 void WriteTokens(const std::vector<Token>& tokens,
-                 const EntropyEncodingData& codes,
-                 const std::vector<uint8_t>& context_map, BitWriter* writer) {
+                 const EntropyEncodingData& codes, const uint8_t* context_map,
+                 size_t num_contexts, BitWriter* writer) {
   BitWriter::Allotment allotment(writer, 32 * tokens.size() + 32 * 1024 * 4);
   std::vector<uint64_t> out;
   std::vector<uint8_t> out_nbits;
@@ -649,7 +649,7 @@ void WriteTokens(const std::vector<Token>& tokens,
   const int end = tokens.size();
   ANSCoder ans;
   UintCoder uint_conder;
-  if (context_map.size() > 1) {
+  if (num_contexts > 1) {
     for (int i = end - 1; i >= 0; --i) {
       const Token token = tokens[i];
       const uint8_t histo = context_map[token.context];

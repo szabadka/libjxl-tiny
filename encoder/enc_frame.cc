@@ -4,6 +4,9 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
+#define USE_STATIC_HISTOGRAMS 1
+#define USE_STATIC_CONTEXT_MAP 1
+
 #include "encoder/enc_frame.h"
 
 #include <stddef.h>
@@ -38,6 +41,9 @@
 #include "encoder/gaborish.h"
 #include "encoder/image.h"
 #include "encoder/quant_weights.h"
+#if USE_STATIC_CONTEXT_MAP
+#include "encoder/static_entropy_codes.h"
+#endif
 
 namespace jxl {
 namespace {
@@ -440,24 +446,25 @@ void WriteQuantScales(int global_scale, int quant_dc, BitWriter* writer) {
   }
 }
 
-void WriteContextMap(const std::vector<uint8_t>& context_map,
+void WriteContextMap(const uint8_t* context_map, size_t num_contexts,
                      BitWriter* writer) {
-  if (context_map.empty()) {
+  if (num_contexts == 0) {
     return;
   }
-  if (*std::max_element(context_map.begin(), context_map.end()) == 0) {
+  if (*std::max_element(context_map, context_map + num_contexts) == 0) {
     writer->AllocateAndWrite(3, 1);  // simple code, 0 bits per entry
     return;
   }
   writer->AllocateAndWrite(3, 0);  // no simple code, no MTF, no LZ77
   std::vector<Token> tokens;
-  for (size_t i = 0; i < context_map.size(); i++) {
+  for (size_t i = 0; i < num_contexts; i++) {
     tokens.emplace_back(0, context_map[i]);
   }
   EntropyEncodingData codes;
   std::vector<uint8_t> dummy_context_map(1);
-  WriteHistograms(BuildHistograms(1, tokens), &codes, writer);
-  WriteTokens(tokens, codes, dummy_context_map, writer);
+  WriteHistograms(BuildHistograms(nullptr, 1, tokens), &codes, writer);
+  WriteTokens(tokens, codes, dummy_context_map.data(), dummy_context_map.size(),
+              writer);
 }
 
 void WriteContextTree(size_t num_dc_groups, BitWriter* writer) {
@@ -466,13 +473,13 @@ void WriteContextTree(size_t num_dc_groups, BitWriter* writer) {
   tokens[1].value = PackSigned(1 + num_dc_groups);
   EntropyEncodingData codes;
   std::vector<uint8_t> context_map;
-  auto histograms = BuildHistograms(kNumTreeContexts, tokens);
+  auto histograms = BuildHistograms(nullptr, kNumTreeContexts, tokens);
   ClusterHistograms(&histograms, &context_map);
   writer->AllocateAndWrite(1, 1);  // not an empty tree
   writer->AllocateAndWrite(1, 0);  // no lz77
-  WriteContextMap(context_map, writer);
+  WriteContextMap(context_map.data(), context_map.size(), writer);
   WriteHistograms(histograms, &codes, writer);
-  WriteTokens(tokens, codes, context_map, writer);
+  WriteTokens(tokens, codes, context_map.data(), context_map.size(), writer);
 }
 
 void WriteDCGlobal(const QuantScales& qscales, const ColorCorrelationMap& cmap,
@@ -500,12 +507,12 @@ void WriteDCGlobal(const QuantScales& qscales, const ColorCorrelationMap& cmap,
   }
   allotment.Reclaim(group_writer);
   WriteContextTree(num_dc_groups, group_writer);
-  HistogramBuilder builder(kNumDCContexts);
+  HistogramBuilder builder(nullptr, kNumDCContexts);
   builder.Add(dc_tokens);
   builder.Add(ac_meta_tokens);
   group_writer->AllocateAndWrite(1, 0);  // no lz77
   ClusterHistograms(&builder.histograms, dc_context_map);
-  WriteContextMap(*dc_context_map, group_writer);
+  WriteContextMap(dc_context_map->data(), dc_context_map->size(), group_writer);
   WriteHistograms(builder.histograms, dc_code, group_writer);
 }
 
@@ -598,7 +605,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
       writer->Write(2, 0);  // extra_dc_precision
       writer->Write(4, 3);  // use global tree, default wp, no transforms
       allotment.Reclaim(writer);
-      WriteTokens(dc_tokens[group_index], dc_code, dc_context_map, writer);
+      WriteTokens(dc_tokens[group_index], dc_code, dc_context_map.data(),
+                  dc_context_map.size(), writer);
     }
     {
       const Rect r = dim.DCBlockRect(group_index);
@@ -607,7 +615,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
       if (nb_bits != 0) writer->Write(nb_bits, num_ac_blocks[group_index] - 1);
       writer->Write(4, 3);  // use global tree, default wp, no transforms
       allotment.Reclaim(writer);
-      WriteTokens(ac_meta_tokens[group_index], dc_code, dc_context_map, writer);
+      WriteTokens(ac_meta_tokens[group_index], dc_code, dc_context_map.data(),
+                  dc_context_map.size(), writer);
     }
   };
   JXL_CHECK(RunOnPool(pool, 0, dim.num_dc_groups, ThreadPool::NoInit,
@@ -625,10 +634,45 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     group_writer->Write(2, 3);
     group_writer->Write(13, 0);  // all default coeff order
     allotment.Reclaim(group_writer);
-    auto histograms = BuildHistograms(kNumACContexts, ac_tokens);
     group_writer->AllocateAndWrite(1, 0);  // no lz77
+#if USE_STATIC_HISTOGRAMS
+    std::vector<Histogram> histograms(kNumStaticHistograms);
+    for (size_t i = 0; i < kNumStaticHistograms; ++i) {
+      histograms[i].InitStatic(kStaticHistograms[i], kStaticAlphabetSize);
+    }
+    WriteContextMap(kStaticACContextMap, kNumACContexts, group_writer);
+#else
+#if USE_STATIC_CONTEXT_MAP
+    auto histograms =
+        BuildHistograms(kStaticACContextMap, kNumStaticHistograms, ac_tokens);
+    WriteContextMap(kStaticACContextMap, kNumACContexts, group_writer);
+#else
+    auto histograms = BuildHistograms(nullptr, kNumACContexts, ac_tokens);
     ClusterHistograms(&histograms, &context_map);
-    WriteContextMap(context_map, group_writer);
+    printf("static constexpr uint8_t kStaticACContextMap[] = {\n   ");
+    for (size_t i = 0; i < context_map.size(); ++i) {
+      printf(" %d,%s", context_map[i],
+             i < 555                  ? (i % 15 == 14 ? "  \\\\\n   " : "")
+             : (i - 555) % 458 == 457 ? "  \\\\\n\n   "
+             : ((i - 555) % 458) % 16 == 15 ? "  \\\\\n   "
+                                            : "");
+    }
+    printf("};\n");
+    WriteContextMap(context_map.data(), context_map.size(), group_writer);
+#endif
+    for (size_t i = 0; i < histograms.size(); ++i) {
+      for (size_t j = 0; j < kStaticAlphabetSize; ++j) {
+        histograms[i].Add(j);
+      }
+      printf("    {");
+      for (size_t j = 0; j < histograms[i].data_.size(); ++j) {
+        printf(" %d,%s", histograms[i].data_[j],
+               (j + 1 == histograms[i].data_.size() || j % 8 == 7) ? "\n      "
+                                                                   : "");
+      }
+      printf("},\n");
+    }
+#endif
     WriteHistograms(histograms, &codes, group_writer);
   }
 
@@ -636,7 +680,13 @@ Status EncodeFrame(const float distance, const Image3F& linear,
   const auto process_group = [&](const uint32_t group_index,
                                  const size_t thread) {
     BitWriter* writer = get_output(2 + dim.num_dc_groups + group_index);
-    WriteTokens(ac_tokens[group_index], codes, context_map, writer);
+#if USE_STATIC_CONTEXT_MAP
+    WriteTokens(ac_tokens[group_index], codes, kStaticACContextMap,
+                kNumACContexts, writer);
+#else
+    WriteTokens(ac_tokens[group_index], codes, context_map.data(),
+                context_map.size(), writer);
+#endif
   };
   JXL_RETURN_IF_ERROR(RunOnPool(pool, 0, dim.num_groups, ThreadPool::NoInit,
                                 process_group, "EncodeGroupCoefficients"));
