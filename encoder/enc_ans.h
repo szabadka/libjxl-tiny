@@ -27,14 +27,19 @@ struct ANSEncSymbolInfo {
   uint16_t freq_;
   std::vector<uint16_t> reverse_map_;
   uint64_t ifreq_;
+  // Prefix coding.
+  uint8_t depth;
+  uint16_t bits;
 };
 
 struct EntropyEncodingData {
   std::vector<std::vector<ANSEncSymbolInfo>> encoding_info;
+  bool use_prefix_code;
 };
 
 void WriteHistograms(const std::vector<Histogram>& histograms,
-                     EntropyEncodingData* codes, BitWriter* writer);
+                     EntropyEncodingData* codes, BitWriter* writer,
+                     bool use_prefix_code = false);
 
 void WriteTokens(const std::vector<Token>& tokens,
                  const EntropyEncodingData& codes, const uint8_t* context_map,

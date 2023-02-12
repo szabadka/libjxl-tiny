@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "encoder/base/bits.h"
+#include "encoder/enc_huffman.h"
 #include "encoder/fast_math-inl.h"
 
 namespace jxl {
@@ -425,6 +426,19 @@ void StoreVarLenUint8(size_t n, Writer* writer) {
 }
 
 template <typename Writer>
+void StoreVarLenUint16(size_t n, Writer* writer) {
+  JXL_DASSERT(n <= 65535);
+  if (n == 0) {
+    writer->Write(1, 0);
+  } else {
+    writer->Write(1, 1);
+    size_t nbits = FloorLog2Nonzero(n);
+    writer->Write(4, nbits);
+    writer->Write(nbits, n - (1ULL << nbits));
+  }
+}
+
+template <typename Writer>
 bool EncodeCounts(const int32_t* counts, const int alphabet_size,
                   const int omit_pos, const int num_symbols, uint32_t shift,
                   const int* symbols, Writer* writer) {
@@ -565,7 +579,6 @@ void BuildAndStoreANSEncodingData(const int32_t* histogram,
   ANSBuildInfoTable(counts.data(), a, alphabet_size, log_alpha_size, info);
   EncodeCounts(counts.data(), alphabet_size, omit_pos, num_symbols,
                ANS_LOG_TAB_SIZE, symbols, writer);
-  return;
 }
 
 class ANSCoder {
@@ -596,28 +609,59 @@ class ANSCoder {
 }  // namespace
 
 void WriteHistograms(const std::vector<Histogram>& histograms,
-                     EntropyEncodingData* codes, BitWriter* writer) {
+                     EntropyEncodingData* codes, BitWriter* writer,
+                     bool use_prefix_code) {
+  codes->use_prefix_code = use_prefix_code;
   BitWriter::Allotment allotment(writer, 1024 + histograms.size() * 16);
-  writer->Write(1, 0);  // use_prefix_code
-  writer->Write(2, 3);  // log_alpha_size = 8
+  writer->Write(1, use_prefix_code);  // use_prefix_code
+  if (!use_prefix_code) {
+    writer->Write(2, 3);  // log_alpha_size = 8
+  }
   for (size_t i = 0; i < histograms.size(); ++i) {
     writer->Write(4, 4);  // split_exponent
     writer->Write(3, 2);  // msb_in_token
     writer->Write(2, 0);  // lsb_in_token
   }
+  if (use_prefix_code) {
+    for (size_t c = 0; c < histograms.size(); ++c) {
+      size_t num_symbol = 1;
+      for (size_t i = 0; i < histograms[c].data_.size(); i++) {
+        if (histograms[c].data_[i]) num_symbol = i + 1;
+      }
+      StoreVarLenUint16(num_symbol - 1, writer);
+    }
+  }
   allotment.Reclaim(writer);
   for (size_t c = 0; c < histograms.size(); ++c) {
+    const int32_t* histogram = histograms[c].data_.data();
     size_t num_symbol = 0;
     for (size_t i = 0; i < histograms[c].data_.size(); i++) {
       if (histograms[c].data_[i]) num_symbol = i + 1;
     }
     codes->encoding_info.emplace_back();
     codes->encoding_info.back().resize(std::max<size_t>(1, num_symbol));
-
+    ANSEncSymbolInfo* info = codes->encoding_info.back().data();
     BitWriter::Allotment allotment(writer, 256 + num_symbol * 24);
-    BuildAndStoreANSEncodingData(histograms[c].data_.data(), num_symbol,
-                                 /*log_alpha_size=*/8,
-                                 codes->encoding_info.back().data(), writer);
+    if (use_prefix_code) {
+      if (num_symbol > 1) {
+        std::vector<uint32_t> histo(num_symbol);
+        for (size_t i = 0; i < num_symbol; i++) {
+          histo[i] = histogram[i];
+          JXL_CHECK(histogram[i] >= 0);
+        }
+        std::vector<uint8_t> depths(num_symbol);
+        std::vector<uint16_t> bits(num_symbol);
+        BuildAndStoreHuffmanTree(histo.data(), num_symbol, depths.data(),
+                                 bits.data(), writer);
+        for (size_t i = 0; i < num_symbol; i++) {
+          info[i].bits = depths[i] == 0 ? 0 : bits[i];
+          info[i].depth = depths[i];
+        }
+      }
+    } else {
+      BuildAndStoreANSEncodingData(histogram, num_symbol, /*log_alpha_size=*/8,
+                                   info, writer);
+    }
     allotment.Reclaim(writer);
   }
 }
@@ -625,7 +669,21 @@ void WriteHistograms(const std::vector<Histogram>& histograms,
 void WriteTokens(const std::vector<Token>& tokens,
                  const EntropyEncodingData& codes, const uint8_t* context_map,
                  size_t num_contexts, BitWriter* writer) {
+  UintCoder uint_coder;
   BitWriter::Allotment allotment(writer, 32 * tokens.size() + 32 * 1024 * 4);
+  if (codes.use_prefix_code) {
+    for (size_t i = 0; i < tokens.size(); i++) {
+      uint32_t tok, nbits, bits;
+      const Token& token = tokens[i];
+      size_t histo = context_map[token.context];
+      uint_coder.Encode(token.value, &tok, &nbits, &bits);
+      uint64_t data = codes.encoding_info[histo][tok].bits;
+      data |= bits << codes.encoding_info[histo][tok].depth;
+      writer->Write(codes.encoding_info[histo][tok].depth + nbits, data);
+    }
+    allotment.Reclaim(writer);
+    return;
+  }
   std::vector<uint64_t> out;
   std::vector<uint8_t> out_nbits;
   out.reserve(tokens.size());
@@ -648,13 +706,12 @@ void WriteTokens(const std::vector<Token>& tokens,
   };
   const int end = tokens.size();
   ANSCoder ans;
-  UintCoder uint_conder;
   if (num_contexts > 1) {
     for (int i = end - 1; i >= 0; --i) {
       const Token token = tokens[i];
       const uint8_t histo = context_map[token.context];
       uint32_t tok, nbits, bits;
-      uint_conder.Encode(tokens[i].value, &tok, &nbits, &bits);
+      uint_coder.Encode(tokens[i].value, &tok, &nbits, &bits);
       const ANSEncSymbolInfo& info = codes.encoding_info[histo][tok];
       // Extra bits first as this is reversed.
       addbits(bits, nbits);
@@ -665,7 +722,7 @@ void WriteTokens(const std::vector<Token>& tokens,
   } else {
     for (int i = end - 1; i >= 0; --i) {
       uint32_t tok, nbits, bits;
-      uint_conder.Encode(tokens[i].value, &tok, &nbits, &bits);
+      uint_coder.Encode(tokens[i].value, &tok, &nbits, &bits);
       const ANSEncSymbolInfo& info = codes.encoding_info[0][tok];
       // Extra bits first as this is reversed.
       addbits(bits, nbits);

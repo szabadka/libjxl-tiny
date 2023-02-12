@@ -4,8 +4,11 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#define USE_STATIC_HISTOGRAMS 1
 #define USE_STATIC_CONTEXT_MAP 1
+#define USE_STATIC_HISTOGRAMS 1
+#define USE_PREFIX_CODE 1
+#define DUMP_CONTEXT_MAP 0
+#define DUMP_HISTOGRAMS 0
 
 #include "encoder/enc_frame.h"
 
@@ -649,17 +652,33 @@ Status EncodeFrame(const float distance, const Image3F& linear,
 #else
     auto histograms = BuildHistograms(nullptr, kNumACContexts, ac_tokens);
     ClusterHistograms(&histograms, &context_map);
+#if DUMP_CONTEXT_MAP
     printf("static constexpr uint8_t kStaticACContextMap[] = {\n   ");
-    for (size_t i = 0; i < context_map.size(); ++i) {
-      printf(" %d,%s", context_map[i],
-             i < 555                  ? (i % 15 == 14 ? "  \\\\\n   " : "")
-             : (i - 555) % 458 == 457 ? "  \\\\\n\n   "
-             : ((i - 555) % 458) % 16 == 15 ? "  \\\\\n   "
-                                            : "");
+    const char* kLineBr = "  \\\\\n   ";
+    for (size_t i = 0; i < 555; ++i) {
+      printf(" %d,%s", context_map[i], (i % 15 == 14 ? kLineBr : ""));
+    }
+    static size_t kCtxPerNZBucket[] = {
+      31u, 31u, 31u, 30u, 29u, 28u, 26u, 23u
+    };
+    for (size_t bctx = 0; bctx < 15; ++bctx) {
+      for (size_t nzctx = 0, i = 0; nzctx < 8; ++nzctx) {
+	for (size_t kctx = 0; kctx < kCtxPerNZBucket[nyctx]; ++kctx, ++i) {
+	  for (size_t p = 0; p < 2; ++p) {
+	    size_t ctx = 555 + bctx * 458 + i * 2 + p;
+	    printf(" %d,", context_map[ctx]);
+	  }
+	  printf("  ");
+	}
+	printf("\n");
+      }
+      printf("\n\n");
     }
     printf("};\n");
+#endif
     WriteContextMap(context_map.data(), context_map.size(), group_writer);
 #endif
+#if DUMP_HISTOGRAMS
     for (size_t i = 0; i < histograms.size(); ++i) {
       for (size_t j = 0; j < kStaticAlphabetSize; ++j) {
         histograms[i].Add(j);
@@ -673,7 +692,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
       printf("},\n");
     }
 #endif
-    WriteHistograms(histograms, &codes, group_writer);
+#endif
+    WriteHistograms(histograms, &codes, group_writer, USE_PREFIX_CODE);
   }
 
   // Write AC groups.

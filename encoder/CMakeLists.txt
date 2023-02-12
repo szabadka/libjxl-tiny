@@ -19,6 +19,8 @@ add_library(jxl_tiny STATIC EXCLUDE_FROM_ALL
   enc_file.cc
   enc_frame.cc
   enc_group.cc
+  enc_huffman.cc
+  enc_huffman_tree.cc
   enc_xyb.cc
   gaborish.cc
   image.cc
