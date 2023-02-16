@@ -103,7 +103,6 @@ void FastClusterHistograms(const std::vector<Histogram>& in,
       largest_idx = i;
     }
   }
-
   constexpr float kMinDistanceForDistinct = 64.0f;
   while (out->size() < max_histograms) {
     (*histogram_symbols)[largest_idx] = out->size();
@@ -132,6 +131,11 @@ void FastClusterHistograms(const std::vector<Histogram>& in,
     (*out)[best].AddHistogram(in[i]);
     HistogramEntropy((*out)[best]);
     (*histogram_symbols)[i] = best;
+  }
+  for (size_t i = 0; i < in.size(); i++) {
+    if (in[i].total_count_ == 0) {
+      (*histogram_symbols)[i] = (*histogram_symbols)[0];
+    }
   }
 }
 

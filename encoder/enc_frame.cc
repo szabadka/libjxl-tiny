@@ -4,10 +4,10 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#define USE_STATIC_CONTEXT_MAP 1
-#define USE_STATIC_HISTOGRAMS 1
-#define USE_PREFIX_CODE 1
-#define DUMP_CONTEXT_MAP 0
+#define USE_STATIC_CONTEXT_MAP 0
+#define USE_STATIC_HISTOGRAMS 0
+#define USE_PREFIX_CODE 0
+#define DUMP_CONTEXT_MAP 1
 #define DUMP_HISTOGRAMS 0
 
 #include "encoder/enc_frame.h"
@@ -46,6 +46,9 @@
 #include "encoder/quant_weights.h"
 #if USE_STATIC_CONTEXT_MAP
 #include "encoder/static_entropy_codes.h"
+#endif
+#if DUMP_CONTEXT_MAP
+#include "encoder/entropy_code_printer.h"
 #endif
 
 namespace jxl {
@@ -495,7 +498,10 @@ void WriteDCGlobal(const QuantScales& qscales, const ColorCorrelationMap& cmap,
   BitWriter::Allotment allotment(group_writer, 1024);
   group_writer->Write(1, 1);  // default dequant dc
   WriteQuantScales(qscales.global_scale, qscales.quant_dc, group_writer);
-  group_writer->Write(1, 1);  // default BlockCtxMap
+  group_writer->Write(1, 0);   // non-default BlockCtxMap
+  group_writer->Write(16, 0);  // no dc ctx, no qft
+  WriteContextMap(kCompactBlockContextMap, sizeof(kCompactBlockContextMap),
+                  group_writer);
   int32_t ytox_dc = cmap.GetYToXDC();
   int32_t ytob_dc = cmap.GetYToBDC();
   if (ytox_dc == 0 && ytob_dc == 0) {
@@ -653,28 +659,8 @@ Status EncodeFrame(const float distance, const Image3F& linear,
     auto histograms = BuildHistograms(nullptr, kNumACContexts, ac_tokens);
     ClusterHistograms(&histograms, &context_map);
 #if DUMP_CONTEXT_MAP
-    printf("static constexpr uint8_t kStaticACContextMap[] = {\n   ");
-    const char* kLineBr = "  \\\\\n   ";
-    for (size_t i = 0; i < 555; ++i) {
-      printf(" %d,%s", context_map[i], (i % 15 == 14 ? kLineBr : ""));
-    }
-    static size_t kCtxPerNZBucket[] = {
-      31u, 31u, 31u, 30u, 29u, 28u, 26u, 23u
-    };
-    for (size_t bctx = 0; bctx < 15; ++bctx) {
-      for (size_t nzctx = 0, i = 0; nzctx < 8; ++nzctx) {
-	for (size_t kctx = 0; kctx < kCtxPerNZBucket[nyctx]; ++kctx, ++i) {
-	  for (size_t p = 0; p < 2; ++p) {
-	    size_t ctx = 555 + bctx * 458 + i * 2 + p;
-	    printf(" %d,", context_map[ctx]);
-	  }
-	  printf("  ");
-	}
-	printf("\n");
-      }
-      printf("\n\n");
-    }
-    printf("};\n");
+    printf("context_map.size() = %zu\n", context_map.size());
+    PrintAnnotatedACContextMap(context_map.data());
 #endif
     WriteContextMap(context_map.data(), context_map.size(), group_writer);
 #endif
