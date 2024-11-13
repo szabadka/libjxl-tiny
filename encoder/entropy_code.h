@@ -13,7 +13,7 @@
 
 namespace jxl {
 
-static constexpr size_t kAlphabetSize = 64;
+static constexpr size_t kAlphabetSize = 68;
 static constexpr uint8_t kMaxContexts = 128;
 
 struct PrefixCode {

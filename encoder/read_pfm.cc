@@ -202,7 +202,7 @@ bool ReadPFM(const char* fn, Image3F* image) {
     for (size_t c = 0; c < 3; ++c) {
       float* row_out = img.PlaneRow(c, y);
       for (size_t x = 0; x < xsize; ++x) {
-        row_out[x] = row_in[x * 3 + c];
+        memcpy(&row_out[x], &row_in[x * 3 + c], sizeof(*row_out));
         if (big_endian) row_out[x] = BSwapFloat(row_out[x]);
       }
     }

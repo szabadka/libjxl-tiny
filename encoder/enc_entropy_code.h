@@ -17,6 +17,9 @@
 
 namespace jxl {
 
+void ConvertBitDepthsToSymbols(const uint8_t* depth, size_t len,
+                               uint16_t* bits);
+
 void OptimizePrefixCodes(const std::vector<Token>& tokens, EntropyCode* code);
 
 void OptimizeEntropyCode(const std::vector<Token>& tokens, EntropyCode* code);

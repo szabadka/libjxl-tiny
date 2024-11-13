@@ -31,3 +31,6 @@ target_link_libraries(jxl_tiny hwy pthread)
 
 add_executable(cjxl_tiny cjxl_main.cc)
 target_link_libraries(cjxl_tiny jxl_tiny)
+
+add_executable(update_static_entropy_codes update_static_entropy_codes_main.cc)
+target_link_libraries(update_static_entropy_codes jxl_tiny)

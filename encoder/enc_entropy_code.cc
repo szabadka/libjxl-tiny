@@ -274,8 +274,6 @@ void WriteHuffmanTree(const uint8_t* depth, size_t length, size_t* tree_size,
   }
 }
 
-namespace {
-
 uint16_t ReverseBits(int num_bits, uint16_t bits) {
   static const size_t kLut[16] = {// Pre-reversed 4-bit values.
                                   0x0, 0x8, 0x4, 0xc, 0x2, 0xa, 0x6, 0xe,
@@ -320,6 +318,8 @@ void ConvertBitDepthsToSymbols(const uint8_t* depth, size_t len,
     }
   }
 }
+
+namespace {
 
 // num = alphabet size
 // depths = symbol depths
